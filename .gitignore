@@ -22,3 +22,5 @@ go.work
 go.work.sum
 run.sh
 windowsbuild.sh
+orphaned-files-search
+file_search_results.db

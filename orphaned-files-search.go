@@ -28,9 +28,17 @@ type TreeReport struct {
 	RootLocation string
 }
 
+func normalizePath(path string) string {
+	// Convert all separators to forward slashes
+	path = strings.ReplaceAll(path, "\\", "/")
+	// Remove any double slashes
+	path = strings.ReplaceAll(path, "//", "/")
+	return path
+}
+
 func parseRootLocation(rootLocation string) string {
 	parts := strings.Split(rootLocation, "${")
-	parsed := parts[0]
+	parsed := normalizePath(parts[0])
 	if len(parsed) > 5 {
 		return parsed
 	}
@@ -134,34 +142,40 @@ func main() {
 		}
 		if !info.IsDir() {
 			fileCount++
+			normalizedPath := normalizePath(path)
 			fileInfo := FileInfo{
-				Path:         path,
+				Path:         normalizedPath,
 				Size:         info.Size(),
 				LastModified: info.ModTime(),
 			}
 
 			if *verbose {
-				fmt.Printf("Processing file: %s\n", path)
+				fmt.Printf("Processing file: %s\n", normalizedPath)
 			}
 
 			// Check if file exists in MS SQL Server
 			var recordID int
 			var module sql.NullString
-			err := mssqlDB.QueryRow("SELECT id, module FROM file_link WHERE path = @p1", path).Scan(&recordID, &module)
+			err := mssqlDB.QueryRow(`
+				SELECT id, module 
+				FROM file_link 
+				WHERE REPLACE(REPLACE(path, '\', '/'), '//', '/') = @p1
+			`, normalizedPath).Scan(&recordID, &module)
+			
 			if err == sql.ErrNoRows {
 				// File is not in file_link table, check tree_report
-				treeReportID := findMatchingTreeReport(path, treeReports)
+				treeReportID := findMatchingTreeReport(normalizedPath, treeReports)
 				if treeReportID != 0 {
 					fileInfo.TableName = "tree_report"
 					fileInfo.RecordID = treeReportID
 					if *verbose {
-						fmt.Printf("File matched tree_report: %s (Report ID: %d)\n", path, treeReportID)
+						fmt.Printf("File matched tree_report: %s (Report ID: %d)\n", normalizedPath, treeReportID)
 					}
 				} else {
 					// File is truly orphaned
 					orphanedCount++
 					if *verbose {
-						fmt.Printf("Orphaned file found: %s\n", path)
+						fmt.Printf("Orphaned file found: %s\n", normalizedPath)
 					}
 				}
 			} else if err != nil {
@@ -174,7 +188,7 @@ func main() {
 					fileInfo.Module = module.String
 				}
 				if *verbose {
-					fmt.Printf("File found in file_link: %s (ID: %d, Module: %s)\n", path, recordID, fileInfo.Module)
+					fmt.Printf("File found in file_link: %s (ID: %d, Module: %s)\n", normalizedPath, recordID, fileInfo.Module)
 				}
 			}
 
