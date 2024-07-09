@@ -11,7 +11,7 @@ import (
 	"time"
 
 	_ "github.com/microsoft/go-mssqldb"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type FileInfo struct {
@@ -29,9 +29,7 @@ type TreeReport struct {
 }
 
 func normalizePath(path string) string {
-	// Convert all separators to forward slashes
 	path = strings.ReplaceAll(path, "\\", "/")
-	// Remove any double slashes
 	path = strings.ReplaceAll(path, "//", "/")
 	return path
 }
@@ -48,6 +46,7 @@ func parseRootLocation(rootLocation string) string {
 func main() {
 	rootFolder := flag.String("root", "", "Root folder to search")
 	sqlServer := flag.String("server", "", "MS SQL Server address")
+	port := flag.Int("port", 1433, "MS SQL Server port")
 	username := flag.String("username", "", "MS SQL Server username")
 	password := flag.String("password", "", "MS SQL Server password")
 	database := flag.String("database", "", "MS SQL Server database name")
@@ -55,11 +54,11 @@ func main() {
 	flag.Parse()
 
 	if *rootFolder == "" || *sqlServer == "" || *username == "" || *password == "" || *database == "" {
-		log.Fatal("All parameters are required")
+		log.Fatal("All parameters are required except port (default is 1433)")
 	}
 
 	// Connect to MS SQL Server
-	connString := fmt.Sprintf("server=%s;user id=%s;password=%s;database=%s", *sqlServer, *username, *password, *database)
+	connString := fmt.Sprintf("server=%s;port=%d;user id=%s;password=%s;database=%s", *sqlServer, *port, *username, *password, *database)
 	mssqlDB, err := sql.Open("sqlserver", connString)
 	if err != nil {
 		log.Fatalf("Error connecting to MS SQL Server: %v", err)
@@ -67,7 +66,7 @@ func main() {
 	defer mssqlDB.Close()
 
 	// Create SQLite database
-	sqliteDB, err := sql.Open("sqlite3", "file_search_results.db")
+	sqliteDB, err := sql.Open("sqlite", "file_search_results.db")
 	if err != nil {
 		log.Fatalf("Error creating SQLite database: %v", err)
 	}
