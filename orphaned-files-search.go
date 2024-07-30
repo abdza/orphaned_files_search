@@ -28,6 +28,12 @@ type TreeReport struct {
 	RootLocation string
 }
 
+type Setting struct {
+	ID   int
+	Name string
+	Text string
+}
+
 func normalizePath(path string) string {
 	path = strings.ReplaceAll(path, "\\", "/")
 	path = strings.ReplaceAll(path, "//", "/")
@@ -106,29 +112,19 @@ func main() {
 	defer insertOrUpdate.Close()
 
 	// Fetch tree_report data
-	rows, err := mssqlDB.Query("SELECT id, rootlocation FROM tree_report")
+	treeReports, err := fetchTreeReports(mssqlDB)
 	if err != nil {
-		log.Fatalf("Error querying tree_report table: %v", err)
+		log.Fatalf("Error fetching tree reports: %v", err)
 	}
-	defer rows.Close()
 
-	var treeReports []TreeReport
-	for rows.Next() {
-		var tr TreeReport
-		if err := rows.Scan(&tr.ID, &tr.RootLocation); err != nil {
-			log.Printf("Error scanning tree_report row: %v", err)
-			continue
-		}
-		if parsedRoot := parseRootLocation(tr.RootLocation); parsedRoot != "" {
-			tr.RootLocation = parsedRoot
-			treeReports = append(treeReports, tr)
-		} else if *verbose {
-			fmt.Printf("Skipping invalid root location: %s (ID: %d)\n", tr.RootLocation, tr.ID)
-		}
+	// Fetch settings data
+	settings, err := fetchSettings(mssqlDB)
+	if err != nil {
+		log.Fatalf("Error fetching settings: %v", err)
 	}
 
 	if *verbose {
-		fmt.Printf("Loaded %d valid tree reports\n", len(treeReports))
+		fmt.Printf("Loaded %d valid tree reports and %d settings\n", len(treeReports), len(settings))
 	}
 
 	fileCount := 0
@@ -171,10 +167,21 @@ func main() {
 						fmt.Printf("File matched tree_report: %s (Report ID: %d)\n", normalizedPath, treeReportID)
 					}
 				} else {
-					// File is truly orphaned
-					orphanedCount++
-					if *verbose {
-						fmt.Printf("Orphaned file found: %s\n", normalizedPath)
+					// Check settings table
+					settingID, settingName := findMatchingSetting(normalizedPath, settings)
+					if settingID != 0 {
+						fileInfo.TableName = "settings"
+						fileInfo.RecordID = settingID
+						fileInfo.Module = settingName
+						if *verbose {
+							fmt.Printf("File matched settings: %s (Setting ID: %d, Name: %s)\n", normalizedPath, settingID, settingName)
+						}
+					} else {
+						// File is truly orphaned
+						orphanedCount++
+						if *verbose {
+							fmt.Printf("Orphaned file found: %s\n", normalizedPath)
+						}
 					}
 				}
 			} else if err != nil {
@@ -208,9 +215,71 @@ func main() {
 
 func findMatchingTreeReport(filePath string, treeReports []TreeReport) int {
 	for _, tr := range treeReports {
-		if strings.HasPrefix(filePath, tr.RootLocation) {
+		if strings.HasPrefix(strings.ToLower(filePath), strings.ToLower(tr.RootLocation)) {
 			return tr.ID
 		}
 	}
 	return 0
+}
+
+func fetchTreeReports(db *sql.DB) ([]TreeReport, error) {
+	rows, err := db.Query(`SELECT id, REPLACE(REPLACE(rootlocation, '\', '/'), '//', '/') as rootlocation FROM tree_report`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying tree_report table: %v", err)
+	}
+	defer rows.Close()
+
+	var treeReports []TreeReport
+	for rows.Next() {
+		var tr TreeReport
+		if err := rows.Scan(&tr.ID, &tr.RootLocation); err != nil {
+			log.Printf("Error scanning tree_report row: %v", err)
+			continue
+		}
+		if parsedRoot := parseRootLocation(tr.RootLocation); parsedRoot != "" {
+			tr.RootLocation = parsedRoot
+			treeReports = append(treeReports, tr)
+		}
+	}
+	return treeReports, nil
+}
+
+func fetchSettings(db *sql.DB) ([]Setting, error) {
+	rows, err := db.Query(`
+		SELECT id, name, REPLACE(REPLACE(cast(text as nvarchar(max)), '\', '/'), '//', '/') as text 
+		FROM settings 
+		WHERE text LIKE '%csdportal%' 
+		AND name NOT LIKE '%path%' 
+		AND name != 'uploadfolder' 
+		AND text NOT LIKE 'http:%' 
+		AND text NOT LIKE 'jdbc:%' 
+		ORDER BY name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("error querying settings table: %v", err)
+	}
+	defer rows.Close()
+
+	var settings []Setting
+	for rows.Next() {
+		var s Setting
+		if err := rows.Scan(&s.ID, &s.Name, &s.Text); err != nil {
+			log.Printf("Error scanning settings row: %v", err)
+			continue
+		}
+		s.Text = parseRootLocation(s.Text)
+		if s.Text != "" {
+			settings = append(settings, s)
+		}
+	}
+	return settings, nil
+}
+
+func findMatchingSetting(filePath string, settings []Setting) (int, string) {
+	for _, s := range settings {
+		if strings.HasPrefix(strings.ToLower(filePath), strings.ToLower(s.Text)) {
+			return s.ID, s.Name
+		}
+	}
+	return 0, ""
 }
